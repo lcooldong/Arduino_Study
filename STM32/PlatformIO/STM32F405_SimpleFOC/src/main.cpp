@@ -86,6 +86,17 @@ MotorParameters TMR_57_Motor = {
   .default_velocity = 0.0f
 };
 
+MotorParameters TMR_100_Motor = {
+  .name = "TMR 100",
+  .resistance    = TMR_100_RESISTANCE,
+  .inductance    = TMR_100_INDUCTANCE,
+  .pole_pairs    = TMR_100_POLE_PAIR,
+  .voltage_limit = TMR_100_VOLTAGE_LIMIT,
+  .current_limit = TMR_100_RATED_CURRENT,
+  .default_velocity = 0.0f
+};
+
+
 MotorParameters TBM_12913_Motor = {
   .name = "TBM 12913",
   .resistance    = TBM_12913_RESISTANCE,
@@ -99,9 +110,9 @@ MotorParameters TBM_12913_Motor = {
 
 
 
-MotorParameters motors[] = {P60_KV170_Motor, TMR_57_Motor, TBM_12913_Motor };
-int activeMotorType = 0; // Default motor selection
-enum MotorType { P60_KV170, TMR_57, TBM_12913 };
+MotorParameters motors[] = {P60_KV170_Motor, TMR_57_Motor, TMR_100_Motor, TBM_12913_Motor };
+int activeMotorType = 3; // Default motor selection
+enum MotorType { P60_KV170, TMR_57, TMR_100, TBM_12913 };
 
 
 uint32_t currentMillis = 0;
@@ -139,7 +150,8 @@ void buttonClick() {
 void printActiveMotorStatus();
 void applyProfile(int idx);
 
-Commander command = Commander(Serial2);   // Serial for command interface
+Commander command = Commander(Serial);   // Serial for command interface
+// Commander command = Commander(Serial2);   // Serial for command interface
 void doMotor(char* cmd) {
   int idx = atoi(cmd);
   if(idx < 0 || idx >= sizeof(motors)/sizeof(MotorParameters)) {
@@ -193,13 +205,13 @@ void setup() {
   motor.velocity_limit = 500; // limit voltage change rate
   motor.pole_pairs = motors[activeMotorType].pole_pairs;
   // motor.phase_inductance = TMR_57_INDUCTANCE ; // -> FOC tuning
-  motor.phase_resistance = motors[activeMotorType].resistance; // milli ohm
+  motor.phase_resistance = motors[activeMotorType].resistance; // ohm
   motor.controller = MotionControlType::velocity_openloop; //  MAX 136 rad/s -> 1300rpm
 
 
-  motor.useMonitoring(Serial);
-  motor.monitor_variables = _MON_TARGET | _MON_VEL | _MON_ANGLE; 
-  motor.monitor_downsample = 100;
+  // motor.useMonitoring(Serial);
+  // motor.monitor_variables = _MON_TARGET | _MON_VEL | _MON_ANGLE; 
+  // motor.monitor_downsample = 100;
 
   if(!motor.init()){
     Serial.println("Motor init failed!");
@@ -213,7 +225,7 @@ void setup() {
   command.add('V', doVelocity,  "movement velocity");
 
   Serial.printf("%d pole pairs motor initialized\r\n", motor.pole_pairs);
-  Serial.println("Motor ready!");
+  Serial.printf("%s Motor Ready!\r\n", motors[activeMotorType].name);
   Serial.println("Set target position [rad]");
   
   _delay(1000);
@@ -258,7 +270,7 @@ void setup() {
   // motor.initFOC();
 
   command.decimal_places = 4; // Set number of decimal places for command output 출력형식
-  command.add('M', doMotor, "Select motor Profile ==> M0, M1, M2");
+  command.add('M', doMotor, "Select motor Profile ==> M0, M1, M2, M3");
   motor.target = 0;
   // if (motor.motor_status != 4) { // 0 - fail initFOC
   //   Serial.println("ERROR:" + String(motor.motor_status));
@@ -291,7 +303,7 @@ void loop() {
     previousMillis[2] = currentMillis;
     if(Serial.available()){
       char c = Serial.read();
-      // Serial.printf("Received: %c\r\n", c);
+      Serial.printf("Received: %c\r\n", c);
       switch (c)
       {
       case 'a':
@@ -338,13 +350,8 @@ void loop() {
   }
   else
   {
-
-    
- 
-    
-
     motor.move(target_velocity);
-    command.run();
+    // command.run();
     if (fabs(target_velocity - last_target_velocity) > 0.0f) {
       // motor.move(target_velocity);
       Serial.printf("Move to velocity: %.2f rad/s \r\n", target_velocity);
