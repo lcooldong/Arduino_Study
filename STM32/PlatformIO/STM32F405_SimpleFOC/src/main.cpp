@@ -4,7 +4,7 @@
 #include "robot_Motor.h"
 
 
-#define DEBUG
+// #define DEBUG
 
 #ifdef DEBUG
 #include <OneButton.h>
@@ -111,7 +111,7 @@ MotorParameters TBM_12913_Motor = {
 
 
 MotorParameters motors[] = {P60_KV170_Motor, TMR_57_Motor, TMR_100_Motor, TBM_12913_Motor };
-int activeMotorType = 3; // Default motor selection
+int activeMotorType = 0; // Default motor selection
 enum MotorType { P60_KV170, TMR_57, TMR_100, TBM_12913 };
 
 
@@ -150,8 +150,12 @@ void buttonClick() {
 void printActiveMotorStatus();
 void applyProfile(int idx);
 
+#ifdef DEBUG
 Commander command = Commander(Serial);   // Serial for command interface
-// Commander command = Commander(Serial2);   // Serial for command interface
+#else
+Commander command = Commander(Serial2);   // Serial for command interface
+#endif
+
 void doMotor(char* cmd) {
   int idx = atoi(cmd);
   if(idx < 0 || idx >= sizeof(motors)/sizeof(MotorParameters)) {
@@ -297,10 +301,13 @@ void loop() {
   }
   else if(currentMillis - previousMillis[1] >= 10) {
     previousMillis[1] = currentMillis;
+#ifdef DEBUG
     button.tick(); // Check button state
+#endif
   }
   else if(currentMillis - previousMillis[2] >= 1) {
     previousMillis[2] = currentMillis;
+#ifdef DEBUG
     if(Serial.available()){
       char c = Serial.read();
       Serial.printf("Received: %c\r\n", c);
@@ -347,11 +354,15 @@ void loop() {
         break;
       }
     }
+#endif
+
   }
   else
   {
     motor.move(target_velocity);
-    // command.run();
+#ifndef DEBUG
+  command.run();
+#endif
     if (fabs(target_velocity - last_target_velocity) > 0.0f) {
       // motor.move(target_velocity);
       Serial.printf("Move to velocity: %.2f rad/s \r\n", target_velocity);
