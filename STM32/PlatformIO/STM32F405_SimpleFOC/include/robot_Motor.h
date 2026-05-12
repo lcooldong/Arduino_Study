@@ -33,7 +33,8 @@
 #define TMR_100_INDUCTANCE     0.000174
 #define TMR_100_RESISTANCE     0.045 // 35mΩ
 #define TMR_100_VOLTAGE_LIMIT  48
-#define TMR_100_RATED_CURRENT  12.5
+// #define TMR_100_RATED_CURRENT  16.5
+#define TMR_100_RATED_CURRENT  30.0f
 #define TMR_100_POLE_PAIR      10
 
 #endif
