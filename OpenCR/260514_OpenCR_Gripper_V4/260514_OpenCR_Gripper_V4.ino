@@ -3,6 +3,11 @@
 #include <CAN.h>
 #include <Wire.h>
 #include <EEPROM.h>
+#include "Button.h"
+
+
+#define OPENCR_CAN
+
 
 #define USER1_LED   22  // SINK (LOW -> TUNR ON)
 #define USER2_LED   23  // SINK
@@ -14,38 +19,52 @@
 #define GRIP_LED   USER3_LED
 #define PUSH_LED   USER4_LED
 
+#define USER_BUTTON 3
+
 #define DXL_SERIAL   Serial3
 #define DEBUG_SERIAL Serial
 
-// #define DXL_CLOSE_POSITION      
-// #define DXL_OPEN_POSITION       
-// #define DXL_PUSH_POSTION        
-// #define DXL_RELEASE_POSITION    
-#define DXL_GRIP_VELOCITY   100
-#define DXL_PUSH_VELOCITY   100
+#define DXL_CLOSE_POSITION      2040
+#define DXL_OPEN_POSITION       1200
 
-#define ARRIVE_THRESHOLD    10
-#define GRIP_THRESHOLD_RAW  80
-#define GOAL_CURRENT        300
+#define DXL_PUSH_POSTION        2200
+#define DXL_RELEASE_POSITION    3800
+
+#define DXL_GRIP_VELOCITY       100
+#define DXL_PUSH_VELOCITY       200
+
+#define ARRIVE_THRESHOLD        10
+#define GRIP_THRESHOLD_RAW      80
+#define GOAL_CURRENT            300
 
 const uint8_t GRIPPER_ID = 1;
 const uint8_t PUSHER_ID = 2;
+const unsigned long CAN_RX_TIMEOUT_MS = 200;
 
 // 각 모터의 목표 위치를 저장할 변수 (전역 변수로 선언)
 uint16_t gripper_Target = 0;
 uint16_t pusher_Target = 0;
 
+bool isOpened = true;
+bool isPushed = false;
+
 // 이동 중인지 상태를 관리할 플래그
 bool isGripperMoving = false;
 bool isPusherMoving = false;
 
-
+bool longPressExecuted = false;
+bool can_bus_active = false;       // 현재 CAN 버스가 살아있는가?
+bool need_send_heartbeat = false;
+unsigned long last_rx_millis = 0;   // 마지막 마스터 패킷 수신 시간
 
 const int DXL_DIR_PIN = 84; // OpenCR Board's DIR PIN.
 const float DXL_PROTOCOL_VERSION = 2.0;
 Dynamixel2Arduino dxl(DXL_SERIAL, DXL_DIR_PIN);
 
+Button myBtn(3, true, 100);
+#ifdef OPENCR_CAN
 can_message_t tx_msg, rx_msg;
+#endif
 uint32_t can_rx_count = 0, can_tx_count = 0;
 
 enum
@@ -160,17 +179,35 @@ void setup() {
         DEBUG_SERIAL.println("Motor Not Connected");
     }
 
-
-    canInit(0x123, CAN_BAUD_500K);
+    DEBUG_SERIAL.println("SET PINOUT");
 
     pinMode(CAN_TX_LED, OUTPUT);
     pinMode(CAN_RX_LED, OUTPUT);
     pinMode(GRIP_LED, OUTPUT);
     pinMode(PUSH_LED, OUTPUT);
     pinMode(ARDUINO_LED, OUTPUT);
+    pinMode(USER_BUTTON, INPUT_PULLUP);
+
+    delay(10);
+    for(int i = 0; i < 5; i++) {
+        myBtn.read();
+        delay(5);
+    }
+    longPressExecuted = false;
+
+    DEBUG_SERIAL.println("Initializing CAN...");
+#ifdef OPENCR_CAN
+    bool can_ok = canInit(0x123, CAN_BAUD_500K);
+    if(can_ok) {
+        DEBUG_SERIAL.println("CAN Init Success!");
+    } else {
+        DEBUG_SERIAL.println("CAN Init Fail! but continue to setup...");
+    }
+#endif
 
     dxl.torqueOff(GRIPPER_ID);
-    dxl.setOperatingMode(GRIPPER_ID, OP_CURRENT_BASED_POSITION);
+    // dxl.setOperatingMode(GRIPPER_ID, OP_CURRENT_BASED_POSITION);
+    dxl.setOperatingMode(PUSHER_ID, OP_EXTENDED_POSITION);
     dxl.torqueOn(GRIPPER_ID);
 
     dxl.writeControlTableItem(PROFILE_VELOCITY, GRIPPER_ID, DXL_GRIP_VELOCITY);
@@ -190,6 +227,9 @@ void setup() {
     
     dxl.ledOn(GRIPPER_ID);
     dxl.ledOn(PUSHER_ID);
+
+    
+
     DEBUG_SERIAL.println("SETUP DONE");
 }
 
@@ -199,42 +239,40 @@ void setup() {
 void loop() {
     unsigned long currMillis = millis();
 
+    buttonTask();
+    checkArrival();
+    checkGripStatus();
+    // 캔 데이터 받으면 모터 동작함
+#ifdef OPENCR_CAN
     if(canReceive()){
         digitalWrite(CAN_RX_LED, LOW);
         ledRxMillis = currMillis;
+
+        can_bus_active = true; // 통신 부활!
+        last_rx_millis = currMillis;
     }
-    checkArrival();
-    checkGripStatus();
+
+    if (need_send_heartbeat && isCanRecentlyAlive()) {
+        need_send_heartbeat = false;
+        sendHeartbeatPacket();
+    }
+
+#endif
+
+    
 
     // HeartBeat
-    if(currMillis - pingMillis >= 1000){
+    if(currMillis - pingMillis >= 500){
         pingMillis = currMillis;
         // dxl.ping(GRIPPER_ID);
         
+        dxlReconnect();   
+    }
 
-        can_packet_t txPkt = {0};
-        txPkt.cmd = CMD_HEARTBEAT;
-        txPkt.id = 0x00;
-        // txPkt.data.status_res.gripper_pos = system_Status.data.status_res.gripper_pos;
-        // txPkt.data.status_res.pusher_pos = system_Status.data.status_res.pusher_pos;
-        
-        system_Status.data.status_res.gripper_pos = dxl.getPresentPosition(GRIPPER_ID);
-        txPkt.data.status_res.gripper_pos = system_Status.data.status_res.gripper_pos;
-        system_Status.data.status_res.pusher_pos = dxl.getPresentPosition(PUSHER_ID);
-        txPkt.data.status_res.pusher_pos = system_Status.data.status_res.pusher_pos;
-
-        txPkt.data.status_res.isConnect = system_Status.data.status_res.isConnect;
-        
-
-        tx_msg.format = CAN_STD_FORMAT;
-        tx_msg.length = sizeof(can_packet_t);
-        memcpy(tx_msg.data, &txPkt, tx_msg.length);
-
-        canSend(0x124, tx_msg);
-
-        digitalWrite(CAN_TX_LED, LOW);  // LOW -> ON
-        ledTxMillis = currMillis;
-        dxlReconnect();
+   // 4. 통신선 탈락 예외 처리 (3초 동안 마스터 패킷이 안 오면 송신을 잠가서 하드웨어 보호)
+    if (can_bus_active && !isCanRecentlyAlive()) {
+        can_bus_active = false;
+        DEBUG_SERIAL.println("CAN Line Disconnected! Blocking TX to prevent lock.");
     }
 
     if(currMillis - ledTxMillis >=10){
@@ -243,12 +281,14 @@ void loop() {
     if(currMillis - ledRxMillis >=10){
         digitalWrite(CAN_RX_LED, HIGH);
     }
+   
 }
 
 
 
 //////////////////////////////////FUNCTION/////////////////////////////////////
 
+#ifdef OPENCR_CAN
 bool canInit(uint32_t id, uint8_t CAN_BAUD)
 {
     // if(CanBus.begin(CAN_BAUD, CAN_STD_FORMAT) == false)
@@ -261,19 +301,23 @@ bool canInit(uint32_t id, uint8_t CAN_BAUD)
     {
         DEBUG_SERIAL.println("CAN open complete");
         CanBus.configFilter(id, 0, CAN_STD_FORMAT); // ID, MASK, FORMAT
-        can_message_t temp_msg;
+        // can_message_t temp_msg;
 
-        temp_msg.length = sizeof(can_packet_t);
-        temp_msg.format = CAN_STD_FORMAT;
-        for(int i=0; i< temp_msg.length; i++){
-            temp_msg.data[i] = 0xFF;
-        }
-        canSend(0x1FF, temp_msg);
-
+        // temp_msg.length = sizeof(can_packet_t);
+        // temp_msg.format = CAN_STD_FORMAT;
+        // for(int i=0; i< temp_msg.length; i++){
+        //     temp_msg.data[i] = 0xFF;
+        // }
+        // canSend(0x1FF, temp_msg);
         return true;
     }
 
     return false;
+}
+
+bool isCanRecentlyAlive()
+{
+    return (millis() - last_rx_millis) <= CAN_RX_TIMEOUT_MS;
 }
 
 
@@ -312,6 +356,11 @@ bool canReceive()
                     uint8_t targetId = rxPkt->id;
                     uint16_t targetPos = rxPkt->data.move_cmd.target_position;
                     uint16_t targetSpd = rxPkt->data.move_cmd.speed;
+
+                    if (targetId != GRIPPER_ID && targetId != PUSHER_ID) {
+                        DEBUG_SERIAL.println("Invalid motor ID");
+                        break;
+                    }
 
                     // 1. 속도 설정 (속도가 실려온 경우에만)
                     if(targetSpd > 0) {
@@ -365,8 +414,11 @@ bool canReceive()
                     break;
 
                 case CMD_GET_STATE: // 0x10 (즉시 상태 보고 요청)
-                    pingMillis = millis(); // 하트비트 타이머를 초기화해서 즉시 전송 유도 가능
+                    need_send_heartbeat = true;
                     DEBUG_SERIAL.println("State Request Received");
+                    break;
+                case CMD_HEARTBEAT:
+                    DEBUG_SERIAL.println("State/Heartbeat Request Received");
                     break;
 
                 default:
@@ -380,27 +432,54 @@ bool canReceive()
     return false;
 }
 
-
-void canSend(uint32_t id, can_message_t msg)
+bool canSendSafe(uint32_t id, can_message_t msg)
 {
-    // 구조체 전달
+#ifdef OPENCR_CAN
+    if (!isCanRecentlyAlive()) {
+        can_bus_active = false;
+        return false;
+    }
+
     msg.id = id;
     msg.format = CAN_STD_FORMAT;
 
     CanBus.writeMessage(&msg);
+
     can_tx_count++;
-    DEBUG_SERIAL.print("[");
-    DEBUG_SERIAL.print(can_tx_count);
-    DEBUG_SERIAL.print("] ");
-    for(int i=0; i < msg.length; i++)
-    {   
-        DEBUG_SERIAL.print(msg.data[i]);
-        if(i < msg.length - 1)
-        {
-            DEBUG_SERIAL.print(" | ");
-        }
+    return true;
+#else
+    return false;
+#endif
+}
+
+void sendHeartbeatPacket()
+{
+#ifdef OPENCR_CAN
+    if (!isCanRecentlyAlive()) {
+        can_bus_active = false;
+        return;
     }
-    DEBUG_SERIAL.println();
+
+    can_packet_t txPkt = {0};
+    txPkt.cmd = CMD_HEARTBEAT;
+    txPkt.id = 0x00;
+
+    system_Status.data.status_res.gripper_pos = dxl.getPresentPosition(GRIPPER_ID);
+    system_Status.data.status_res.pusher_pos = dxl.getPresentPosition(PUSHER_ID);
+
+    txPkt.data.status_res.gripper_pos = system_Status.data.status_res.gripper_pos;
+    txPkt.data.status_res.pusher_pos = system_Status.data.status_res.pusher_pos;
+    txPkt.data.status_res.isConnect = system_Status.data.status_res.isConnect;
+
+    tx_msg.format = CAN_STD_FORMAT;
+    tx_msg.length = sizeof(can_packet_t);
+    memcpy(tx_msg.data, &txPkt, tx_msg.length);
+
+    if (canSendSafe(0x124, tx_msg)) {
+        digitalWrite(CAN_TX_LED, LOW);
+        ledTxMillis = millis();
+    }
+#endif
 }
 
 
@@ -467,9 +546,20 @@ void checkArrival() {
         uint16_t presentPos = dxl.getPresentPosition(GRIPPER_ID);
         // abs() 함수로 차이값(절대값) 계산
         if (abs((long)presentPos - (long)gripper_Target) <= ARRIVE_THRESHOLD) {
-            sendArrivedPacket(GRIPPER_ID, presentPos);
+            
             isGripperMoving = false; // 도착했으므로 플래그 해제
-            DEBUG_SERIAL.println("GRIPPER Arrived!");
+
+            // if (abs((long)presentPos - DXL_CLOSE_POSITION) <= 100) { // 오차 범위 200 정도 설정
+            //     isOpened = false;
+            //     DEBUG_SERIAL.println("Status: Gripper CLOSED");
+            // } 
+            // // 열림 위치(Open) 근처라면 열린 것으로 간주
+            // else if (abs((long)presentPos - DXL_OPEN_POSITION) <= 100) {
+            //     isOpened = true;
+            //     DEBUG_SERIAL.println("Status: Gripper OPENED");
+            // }
+            sendArrivedPacket(GRIPPER_ID, presentPos);
+            DEBUG_SERIAL.println("GRIPPER Arrived!");           
         }
     }
 
@@ -477,8 +567,20 @@ void checkArrival() {
     if (isPusherMoving) {
         uint16_t presentPos = dxl.getPresentPosition(PUSHER_ID);
         if (abs((long)presentPos - (long)pusher_Target) <= ARRIVE_THRESHOLD) {
-            sendArrivedPacket(PUSHER_ID, presentPos);
+            
             isPusherMoving = false;
+
+            // if (abs((long)presentPos - DXL_PUSH_POSTION) <= 100) { 
+            //     isPushed = true;
+            //     DEBUG_SERIAL.println("Status: Pusher PUSHED");
+            // } 
+            // // 열림 위치(Open) 근처라면 열린 것으로 간주
+            // else if (abs((long)presentPos - DXL_RELEASED_POSITION) <= 100) {
+            //     isPushed = false;
+            //     DEBUG_SERIAL.println("Status: Pusher RELEASED");
+            // }
+
+            sendArrivedPacket(PUSHER_ID, presentPos);
             DEBUG_SERIAL.println("PUSHER Arrived!");
             digitalWrite(PUSH_LED, HIGH);
         }
@@ -498,9 +600,16 @@ void sendArrivedPacket(uint8_t id, uint16_t pos) {
     // txPkt.data.status_res.gripper_cur = dxl.getPresentCurrent(GRIPPER_ID);
     txPkt.data.status_res.isConnect = system_Status.data.status_res.isConnect;
 
+#ifdef OPENCR_CAN
+    if (!isCanRecentlyAlive()) {
+        return;
+    }
+
     tx_msg.length = sizeof(can_packet_t);
     memcpy(tx_msg.data, &txPkt, tx_msg.length);
-    canSend(0x124, tx_msg);
+    // canSend(0x124, tx_msg);
+    canSendSafe(0x124, tx_msg);
+#endif
 }
 
 void checkGripStatus() {
@@ -523,4 +632,64 @@ void checkGripStatus() {
         // LED로 잡기 성공 표시 (선택사항)
         digitalWrite(GRIP_LED, LOW); 
     }
+}
+
+void buttonTask(){
+    myBtn.read();
+
+    // [방안 1] 2초가 되는 바로 그 순간 즉시 그리퍼(Gripper) 구동
+    if (myBtn.pressedFor(2000)) {
+        if (!longPressExecuted) {
+            DEBUG_SERIAL.println("--- 2 Seconds Reached! Controlling Gripper Immediate ---");
+            
+            // 1. 사용자 피드백 (내장 LED 켜기)
+            digitalWrite(ARDUINO_LED, HIGH); 
+            
+            // 2. 위치 기반 그리퍼 제어 (열림/닫힘 토글)
+            uint16_t currentPos = dxl.getPresentPosition(GRIPPER_ID);
+            if (abs((long)currentPos - DXL_OPEN_POSITION) < abs((long)currentPos - DXL_CLOSE_POSITION)) {
+                gripper_Target = DXL_CLOSE_POSITION;
+                DEBUG_SERIAL.println("Action: Gripper CLOSE");
+            } else {
+                gripper_Target = DXL_OPEN_POSITION;
+                DEBUG_SERIAL.println("Action: Gripper OPEN");
+            }
+            
+            isGripperMoving = true;
+            dxl.setGoalPosition(GRIPPER_ID, gripper_Target);
+            
+            longPressExecuted = true; // 문 걸어잠그기
+        }
+    }
+
+    // [방안 2] 버튼에서 손을 떼는 순간 (Release)
+    if (myBtn.wasReleased()) {
+        digitalWrite(ARDUINO_LED, LOW); // 피드백 LED 끄기
+
+        // 이미 2초가 지나서 그리퍼가 작동했다면, 손을 떼는 시점에는 아무것도 안 함
+        if (longPressExecuted) {
+            longPressExecuted = false; 
+            DEBUG_SERIAL.println("Button Released after Long Press (Gripper Done)");
+        } 
+        // 2초가 되기 전에 손을 뗐다면 -> "짧은 누름"이므로 푸셔(Pusher) 구동
+        else {
+            DEBUG_SERIAL.println("--- Short Press Detected on Release: Controlling Pusher ---");
+            
+            uint16_t currentPos = dxl.getPresentPosition(PUSHER_ID);
+            
+            // 푸셔도 위치 기반으로 토글 제어 (전진 위치에 가까우면 후진, 반대면 전진)
+            if (abs((long)currentPos - DXL_PUSH_POSTION) < abs((long)currentPos - DXL_RELEASE_POSITION)) {
+                pusher_Target = DXL_RELEASE_POSITION;
+                DEBUG_SERIAL.println("Action: Pusher RELEASE");
+            } else {
+                pusher_Target = DXL_PUSH_POSTION;
+                DEBUG_SERIAL.println("Action: Pusher PUSH");
+                digitalWrite(PUSH_LED, LOW); // 전진 시작할 때 LED 켜기
+            }
+            
+            isPusherMoving = true;
+            dxl.setGoalPosition(PUSHER_ID, pusher_Target);
+        }
+    }
+
 }
