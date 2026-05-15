@@ -27,7 +27,7 @@
 #define DXL_CLOSE_POSITION      2040
 #define DXL_OPEN_POSITION       1200
 
-#define DXL_PUSH_POSTION        2200
+#define DXL_PUSH_POSTION        2100
 #define DXL_RELEASE_POSITION    3800
 
 #define DXL_GRIP_VELOCITY       100
@@ -288,7 +288,6 @@ void loop() {
 
 //////////////////////////////////FUNCTION/////////////////////////////////////
 
-#ifdef OPENCR_CAN
 bool canInit(uint32_t id, uint8_t CAN_BAUD)
 {
     // if(CanBus.begin(CAN_BAUD, CAN_STD_FORMAT) == false)
