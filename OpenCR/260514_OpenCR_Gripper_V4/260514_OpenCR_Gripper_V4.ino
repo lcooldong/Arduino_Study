@@ -37,6 +37,25 @@
 #define GRIP_THRESHOLD_RAW      80
 #define GOAL_CURRENT            300
 
+#define GRIP_MOVE_TIMEOUT_MS    3000
+#define PUSH_MOVE_TIMEOUT_MS    5000
+
+#define ERROR_NONE              0x00
+#define ERROR_GRIPPER_TIMEOUT   0x01
+#define ERROR_PUSHER_TIMEOUT    0x02
+#define ERROR_GRIP_DETECT_FAIL  0x03
+#define ERROR_RETURN_TIMEOUT    0x04
+
+
+unsigned long gripperMoveStartMillis = 0;
+unsigned long pusherMoveStartMillis = 0;
+
+uint16_t gripperPrevTarget = DXL_OPEN_POSITION;
+uint16_t pusherPrevTarget = DXL_RELEASE_POSITION;
+
+bool pending_error = false;
+uint8_t last_error_motor_id = 0;
+
 const uint8_t GRIPPER_ID = 1;
 const uint8_t PUSHER_ID = 2;
 const unsigned long CAN_RX_TIMEOUT_MS = 200;
@@ -51,6 +70,9 @@ bool isPushed = false;
 // 이동 중인지 상태를 관리할 플래그
 bool isGripperMoving = false;
 bool isPusherMoving = false;
+
+bool isGripperReturning = false;
+bool isPusherReturning = false;
 
 bool longPressExecuted = false;
 bool can_bus_active = false;       // 현재 CAN 버스가 살아있는가?
@@ -242,6 +264,8 @@ void loop() {
     buttonTask();
     checkArrival();
     checkGripStatus();
+    // checkMoveTimeout();
+
     // 캔 데이터 받으면 모터 동작함
 #ifdef OPENCR_CAN
     if(canReceive()){
@@ -371,15 +395,20 @@ bool canReceive()
 
                     // 2. 모터 구동 및 도착 감시 설정
                     if(targetId == GRIPPER_ID) {
+                        gripperPrevTarget = dxl.getPresentPosition(GRIPPER_ID);
                         gripper_Target = targetPos; // 전역 변수에 목표가 저장
+                        gripperMoveStartMillis = millis();
                         isGripperMoving = true;      // 도착 감시 시작
+
                         dxl.setGoalPosition(GRIPPER_ID, targetPos);
                         
                         DEBUG_SERIAL.print("GRIPPER Moving to: ");
                         DEBUG_SERIAL.println(targetPos);
                     }
                     else if(targetId == PUSHER_ID) {
+                        pusherPrevTarget = dxl.getPresentCurrent(PUSHER_ID);
                         pusher_Target = targetPos;  // 전역 변수에 목표가 저장
+                        pusherMoveStartMillis = millis();
                         isPusherMoving = true;       // 도착 감시 시작
                         dxl.setGoalPosition(PUSHER_ID, targetPos);
                         
@@ -646,6 +675,10 @@ void buttonTask(){
             
             // 2. 위치 기반 그리퍼 제어 (열림/닫힘 토글)
             uint16_t currentPos = dxl.getPresentPosition(GRIPPER_ID);
+            isGripperMoving = true;
+            gripperMoveStartMillis = millis();
+            gripperPrevTarget = currentPos;
+
             if (abs((long)currentPos - DXL_OPEN_POSITION) < abs((long)currentPos - DXL_CLOSE_POSITION)) {
                 gripper_Target = DXL_CLOSE_POSITION;
                 DEBUG_SERIAL.println("Action: Gripper CLOSE");
@@ -654,7 +687,7 @@ void buttonTask(){
                 DEBUG_SERIAL.println("Action: Gripper OPEN");
             }
             
-            isGripperMoving = true;
+            
             dxl.setGoalPosition(GRIPPER_ID, gripper_Target);
             
             longPressExecuted = true; // 문 걸어잠그기
@@ -675,7 +708,10 @@ void buttonTask(){
             DEBUG_SERIAL.println("--- Short Press Detected on Release: Controlling Pusher ---");
             
             uint16_t currentPos = dxl.getPresentPosition(PUSHER_ID);
-            
+            isPusherMoving = true;
+            pusherMoveStartMillis = millis();
+            pusherPrevTarget = currentPos;
+
             // 푸셔도 위치 기반으로 토글 제어 (전진 위치에 가까우면 후진, 반대면 전진)
             if (abs((long)currentPos - DXL_PUSH_POSTION) < abs((long)currentPos - DXL_RELEASE_POSITION)) {
                 pusher_Target = DXL_RELEASE_POSITION;
@@ -686,9 +722,67 @@ void buttonTask(){
                 digitalWrite(PUSH_LED, LOW); // 전진 시작할 때 LED 켜기
             }
             
-            isPusherMoving = true;
+            
             dxl.setGoalPosition(PUSHER_ID, pusher_Target);
         }
     }
 
+}
+
+
+void checkMoveTimeout() {
+    unsigned long currMillis = millis();
+
+    if (isGripperMoving && currMillis - gripperMoveStartMillis > GRIP_MOVE_TIMEOUT_MS) {
+        uint16_t presentPos = dxl.getPresentPosition(GRIPPER_ID);
+
+        DEBUG_SERIAL.print("GRIPPER Timeout! Present: ");
+        DEBUG_SERIAL.println(presentPos);
+
+        isGripperMoving = false;
+
+        setMotorError(GRIPPER_ID, ERROR_GRIPPER_TIMEOUT);
+
+        // CAN 송신하지 않고, 그리퍼만 안전 위치로 복귀
+        gripper_Target = DXL_OPEN_POSITION;
+        gripperMoveStartMillis = currMillis;
+        isGripperMoving = true;
+
+        dxl.setGoalPosition(GRIPPER_ID, gripper_Target);
+    }
+
+    if (isPusherMoving && currMillis - pusherMoveStartMillis > PUSH_MOVE_TIMEOUT_MS) {
+        uint16_t presentPos = dxl.getPresentPosition(PUSHER_ID);
+
+        DEBUG_SERIAL.print("PUSHER Timeout! Present: ");
+        DEBUG_SERIAL.println(presentPos);
+
+        isPusherMoving = false;
+
+        setMotorError(PUSHER_ID, ERROR_PUSHER_TIMEOUT);
+
+        pusher_Target = DXL_RELEASE_POSITION;
+        pusherMoveStartMillis = currMillis;
+        isPusherMoving = true;
+
+        dxl.setGoalPosition(PUSHER_ID, pusher_Target);
+    }
+}
+
+
+void setMotorError(uint8_t id, uint8_t errorCode) {
+    pending_error = true;
+    last_error_motor_id = id;
+
+    system_Status.cmd = CMD_ERROR;
+    system_Status.id = id;
+    system_Status.data.status_res.error_code = errorCode;
+    system_Status.data.status_res.gripper_pos = dxl.getPresentPosition(GRIPPER_ID);
+    system_Status.data.status_res.pusher_pos = dxl.getPresentPosition(PUSHER_ID);
+    system_Status.data.status_res.isConnect = system_Status.data.status_res.isConnect;
+
+    DEBUG_SERIAL.print("Motor Error ID: ");
+    DEBUG_SERIAL.print(id);
+    DEBUG_SERIAL.print(", Error Code: ");
+    DEBUG_SERIAL.println(errorCode, HEX);
 }

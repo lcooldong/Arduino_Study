@@ -16,7 +16,9 @@ Arduino library for RS485 communication.
 
 ## Description
 
-RS485 is an **experimental** library to make half duplex communication easier.
+**Experimental**
+
+RS485 is an experimental library to make half duplex communication easier.
 The library implements the Stream interface so the user can use
 **print()** and **write()** calls just like one does with **Serial**.
 
@@ -33,7 +35,7 @@ name conflict on the ESP32 platform.
 The new defines all have got an **ASCII_** prefix, e.g. **ASCII_FS**
 
 
-#### Connection schema
+### Connection schema
 
 ```
          Processor                      MAX485
@@ -56,9 +58,9 @@ The new defines all have got an **ASCII_** prefix, e.g. **ASCII_FS**
                                       DE = Driver Output Enable
 ```
 
-#### Related
+### Related
 
-- https://www.gammon.com.au/forum/?id=11428
+- https://www.gammon.com.au/forum/?id=11428 - a very good reference
 - http://en.wikipedia.org/wiki/RS485
 - https://www.ti.com/lit/an/snla049b/snla049b.pdf - 10 ways to bulletproof your RS485
 - https://github.com/RobTillaart/Adler - checksum
@@ -74,7 +76,7 @@ The new defines all have got an **ASCII_** prefix, e.g. **ASCII_FS**
 ```
 
 
-#### Base
+### Base
 
 - **RS485(Stream \* stream, uint8_t sendPin, uint8_t deviceID = 0)** constructor.
 The default device ID is 0 (typically master uses this, or if deviceID is not used).
@@ -83,6 +85,11 @@ via the Serial class.
 The sendPin is the pin that connects to the transmit/receive enable (DE/RE) pins.
 See connection schema above.
 The library sets the pinMode and defaults it to LOW (receiving mode).
+- **uint8_t getDeviceID()** returns the set deviceID. 
+
+
+### Mode
+
 - **void setTXmode()** explicitly set mode to transmitting / sending.
 This implies that the device will stop listening on the RS485 bus.
 - **void setRXmode()** explicitly set mode to receiving / listening.
@@ -90,7 +97,7 @@ This is the default behaviour of every RS485 device.
 - **uint8_t getMode()** returns the current mode, 1 == TX, 0 == RX.
 
 
-#### Stream interface
+### Stream interface
 
 The most important commands of the Stream interface are:
 
@@ -107,7 +114,7 @@ An important command from the stream interface is the **setTimeOut()** as
 this allows reads on the RS485 bus that are limited.
 
 
-#### setMicrosPerByte
+### setMicrosPerByte
 
 **Experimental**
 
@@ -121,9 +128,11 @@ baud rates are used it can be smaller.
 - **uint16_t getMicrosPerByte()** returns set value, default 1100 (9600 baud time).
 
 
-#### Experimental
+### Experimental protocol
 
-Work in progress. The library has an **experimental** protocol implemented to
+**Experimental**
+
+Work in progress. The library has an protocol implemented to
 send and receive larger messages between the nodes in the network. 
 This network consists of one master that can poll multiple slaves. 
 
@@ -131,15 +140,15 @@ In 0.2.5 this protocol has been tested and some bugs in the receive parser
 have been fixed. It still is experimental and it needs more testing.
 
 The library functions are:
-- **size_t send(uint8_t receiverID, uint8_t msg[], uint8_t len)**
+- **size_t send(uint8_t receiverID, uint8_t message[], uint8_t length)**
   - send a buffer of given length to a receiver.
-- **bool receive(uint8_t &senderID, uint8_t msg[], uint8_t &len)**
+- **bool receive(uint8_t &senderID, uint8_t message[], uint8_t &length)**
   - receive a packet, senderID identifies the sender.
 
 Two wrappers:
-- **size_t send(uint8_t receiverID, char msg[], uint8_t len)**
+- **size_t send(uint8_t receiverID, char message[], uint8_t length)**
   - send a buffer of given length to a receiver.
-- **bool receive(uint8_t &senderID, char msg[], uint8_t &len)**
+- **bool receive(uint8_t &senderID, char message[], uint8_t &length)**
   - receive a packet, senderID identifies the sender. 
 
 Current implementation limits messages up to 48 bytes (hardcoded buffer size)
@@ -157,7 +166,7 @@ chip in sending mode, wait for enough time to "flush the buffer" and
 resumes with listening.
 
 
-#### Sniffer hex dump
+### Sniffer hex dump
 
 Since 0.2.5 an example is added that sniffs the bytes on the RS485 bus 
 and prints them as a HEX dump.
@@ -165,7 +174,7 @@ and prints them as a HEX dump.
 Can be used for debugging.
 
 
-#### Pull up resistors
+### Pull up resistors
 
 Do not forget to use one pull up (A line) and one pull down (B line) 
 at only one end of the bus.
@@ -174,7 +183,7 @@ Values depend on the length of the cables, start with 1 KΩ (kilo ohm)
 Note Ω = alt-234.
 
 
-#### Wires
+### Wires
 
 Preferred wire for RS485 is STP (Shielded Twisted Pair), however 
 UTP (Unshielded) will works in many cases.
@@ -187,7 +196,7 @@ every slave has 2 RS485 ports, one for receiving and one for sending.
 Another application is to use these as power lines e.g 5 and 12 V.
 
 
-#### yield()
+### yield()
 
 For RTOS environments the **yield()** function needs to be called 
 when code might be blocking. As the RS485 baud rate can be pretty low, 
@@ -208,7 +217,7 @@ on the baud rate. Use with care.
 TODO: to be tested on ESP32 - RTOS.
 
 
-#### Protocol design
+### Protocol design
 
 An error I made in one of my first RS485 experiments was that a possible
 response of one module would trigger another module to also send a response.
