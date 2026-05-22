@@ -33,7 +33,7 @@
 #define DXL_GRIP_VELOCITY       100
 #define DXL_PUSH_VELOCITY       200
 
-#define ARRIVE_THRESHOLD        10
+#define ARRIVE_THRESHOLD        20  // 잡는 크기에 맞춰서 조정
 #define GRIP_THRESHOLD_RAW      80
 #define GOAL_CURRENT            300
 
@@ -50,6 +50,7 @@
 unsigned long gripperMoveStartMillis = 0;
 unsigned long pusherMoveStartMillis = 0;
 
+// 현재는 실패 시 직전 위치가 아니라 고정 안전 위치로 복귀함
 uint16_t gripperPrevTarget = DXL_OPEN_POSITION;
 uint16_t pusherPrevTarget = DXL_RELEASE_POSITION;
 
